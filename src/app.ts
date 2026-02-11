@@ -79,5 +79,30 @@ export function createApp(db: Database.Database) {
         },
         201
       );
+    })
+    .get("/:slug", (c) => {
+      const slug = c.req.param("slug");
+
+      const link = db
+        .prepare("SELECT id, target_url FROM links WHERE slug = ?")
+        .get(slug) as { id: string; target_url: string } | undefined;
+
+      if (!link) {
+        return c.json({ error: "Link not found", code: "NOT_FOUND" }, 404);
+      }
+
+      // Record click
+      db.prepare(
+        "INSERT INTO clicks (id, link_id, timestamp, ip, user_agent, referrer) VALUES (?, ?, ?, ?, ?, ?)"
+      ).run(
+        nanoid(),
+        link.id,
+        Date.now(),
+        c.req.header("x-forwarded-for") || null,
+        c.req.header("user-agent") || null,
+        c.req.header("referer") || null
+      );
+
+      return c.redirect(link.target_url, 302);
     });
 }
