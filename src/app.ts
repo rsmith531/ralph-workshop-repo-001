@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type Database from "better-sqlite3";
 import { z } from "zod";
 import { nanoid, customAlphabet } from "nanoid";
+import bcrypt from "bcrypt";
 
 const generateSlug = customAlphabet("abcdefghijklmnopqrstuvwxyz0123456789", 7);
 
@@ -23,12 +24,14 @@ const createLinkSchema = z.object({
   url: urlField,
   slug: slugField.optional(),
   expiresAt: z.number().int().positive().optional(),
+  password: z.string().min(4).optional(),
 });
 
 const updateLinkSchema = z.object({
   url: urlField.optional(),
   slug: slugField.optional(),
   expiresAt: z.number().int().positive().optional(),
+  password: z.string().min(4).optional(),
 });
 
 interface LinkRow {
@@ -89,15 +92,16 @@ export function createApp(db: Database.Database) {
         );
       }
 
-      const { url, slug: customSlug, expiresAt } = parsed.data;
+      const { url, slug: customSlug, expiresAt, password } = parsed.data;
       const id = nanoid();
       const slug = customSlug || generateSlug();
       const now = Date.now();
+      const passwordHash = password ? await bcrypt.hash(password, 10) : null;
 
       try {
         db.prepare(
-          "INSERT INTO links (id, slug, target_url, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-        ).run(id, slug, url, expiresAt ?? null, now, now);
+          "INSERT INTO links (id, slug, target_url, password_hash, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).run(id, slug, url, passwordHash, expiresAt ?? null, now, now);
       } catch (err: unknown) {
         if (
           err instanceof Error &&
@@ -120,7 +124,7 @@ export function createApp(db: Database.Database) {
           shortUrl: `${baseUrl}/${slug}`,
           targetUrl: url,
           expiresAt: expiresAt ?? null,
-          hasPassword: false,
+          hasPassword: passwordHash !== null,
           tags: [],
           createdAt: now,
           updatedAt: now,
@@ -214,6 +218,12 @@ export function createApp(db: Database.Database) {
         values.push(parsed.data.expiresAt);
       }
 
+      if (parsed.data.password !== undefined) {
+        const hash = await bcrypt.hash(parsed.data.password, 10);
+        updates.push("password_hash = ?");
+        values.push(hash);
+      }
+
       if (updates.length > 0) {
         const now = Date.now();
         updates.push("updated_at = ?");
@@ -251,13 +261,20 @@ export function createApp(db: Database.Database) {
 
       return c.body(null, 204);
     })
-    .get("/:slug", (c) => {
+    .get("/:slug", async (c) => {
       const slug = c.req.param("slug");
 
       const link = db
-        .prepare("SELECT id, target_url, expires_at FROM links WHERE slug = ?")
+        .prepare(
+          "SELECT id, target_url, password_hash, expires_at FROM links WHERE slug = ?"
+        )
         .get(slug) as
-        | { id: string; target_url: string; expires_at: number | null }
+        | {
+            id: string;
+            target_url: string;
+            password_hash: string | null;
+            expires_at: number | null;
+          }
         | undefined;
 
       if (!link) {
@@ -266,6 +283,23 @@ export function createApp(db: Database.Database) {
 
       if (link.expires_at && link.expires_at < Date.now()) {
         return c.json({ error: "Link expired", code: "GONE" }, 410);
+      }
+
+      if (link.password_hash) {
+        const password = c.req.query("password");
+        if (!password) {
+          return c.json(
+            { error: "Password required", code: "UNAUTHORIZED" },
+            401
+          );
+        }
+        const valid = await bcrypt.compare(password, link.password_hash);
+        if (!valid) {
+          return c.json(
+            { error: "Password required", code: "UNAUTHORIZED" },
+            401
+          );
+        }
       }
 
       // Record click
