@@ -27,6 +27,14 @@ const createLinkSchema = z.object({
   password: z.string().min(4).optional(),
 });
 
+const createTagSchema = z.object({
+  name: z
+    .string()
+    .regex(/^[a-z0-9-]+$/)
+    .min(1)
+    .max(30),
+});
+
 const updateLinkSchema = z.object({
   url: urlField.optional(),
   slug: slugField.optional(),
@@ -260,6 +268,49 @@ export function createApp(db: Database.Database) {
       }
 
       return c.body(null, 204);
+    })
+    .post("/api/tags", async (c) => {
+      const body = await c.req.json();
+      const parsed = createTagSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return c.json(
+          {
+            error: "Invalid request",
+            code: "VALIDATION_ERROR",
+            details: parsed.error.issues,
+          },
+          400
+        );
+      }
+
+      const id = nanoid();
+
+      try {
+        db.prepare("INSERT INTO tags (id, name) VALUES (?, ?)").run(
+          id,
+          parsed.data.name
+        );
+      } catch (err: unknown) {
+        if (
+          err instanceof Error &&
+          err.message.includes("UNIQUE constraint failed: tags.name")
+        ) {
+          return c.json({ error: "Tag already exists", code: "CONFLICT" }, 409);
+        }
+        throw err;
+      }
+
+      return c.json({ id, name: parsed.data.name }, 201);
+    })
+    .get("/api/tags", (c) => {
+      const tags = db
+        .prepare(
+          "SELECT t.id, t.name, COUNT(lt.link_id) as linkCount FROM tags t LEFT JOIN link_tags lt ON t.id = lt.tag_id GROUP BY t.id ORDER BY t.name"
+        )
+        .all() as { id: string; name: string; linkCount: number }[];
+
+      return c.json({ tags });
     })
     .get("/:slug", async (c) => {
       const slug = c.req.param("slug");
