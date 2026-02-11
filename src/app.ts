@@ -80,6 +80,49 @@ export function createApp(db: Database.Database) {
         201
       );
     })
+    .get("/api/links/:id", (c) => {
+      const id = c.req.param("id");
+
+      const link = db
+        .prepare(
+          "SELECT id, slug, target_url, password_hash, expires_at, created_at, updated_at FROM links WHERE id = ?"
+        )
+        .get(id) as
+        | {
+            id: string;
+            slug: string;
+            target_url: string;
+            password_hash: string | null;
+            expires_at: number | null;
+            created_at: number;
+            updated_at: number;
+          }
+        | undefined;
+
+      if (!link) {
+        return c.json({ error: "Link not found", code: "NOT_FOUND" }, 404);
+      }
+
+      const tags = db
+        .prepare(
+          "SELECT t.name FROM tags t JOIN link_tags lt ON t.id = lt.tag_id WHERE lt.link_id = ?"
+        )
+        .all(id) as { name: string }[];
+
+      const baseUrl = process.env["BASE_URL"] || "http://localhost:3000";
+
+      return c.json({
+        id: link.id,
+        slug: link.slug,
+        shortUrl: `${baseUrl}/${link.slug}`,
+        targetUrl: link.target_url,
+        expiresAt: link.expires_at,
+        hasPassword: link.password_hash !== null,
+        tags: tags.map((t) => t.name),
+        createdAt: link.created_at,
+        updatedAt: link.updated_at,
+      });
+    })
     .get("/:slug", (c) => {
       const slug = c.req.param("slug");
 
