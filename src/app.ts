@@ -22,11 +22,13 @@ const slugField = z
 const createLinkSchema = z.object({
   url: urlField,
   slug: slugField.optional(),
+  expiresAt: z.number().int().positive().optional(),
 });
 
 const updateLinkSchema = z.object({
   url: urlField.optional(),
   slug: slugField.optional(),
+  expiresAt: z.number().int().positive().optional(),
 });
 
 interface LinkRow {
@@ -87,15 +89,15 @@ export function createApp(db: Database.Database) {
         );
       }
 
-      const { url, slug: customSlug } = parsed.data;
+      const { url, slug: customSlug, expiresAt } = parsed.data;
       const id = nanoid();
       const slug = customSlug || generateSlug();
       const now = Date.now();
 
       try {
         db.prepare(
-          "INSERT INTO links (id, slug, target_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
-        ).run(id, slug, url, now, now);
+          "INSERT INTO links (id, slug, target_url, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+        ).run(id, slug, url, expiresAt ?? null, now, now);
       } catch (err: unknown) {
         if (
           err instanceof Error &&
@@ -117,7 +119,7 @@ export function createApp(db: Database.Database) {
           slug,
           shortUrl: `${baseUrl}/${slug}`,
           targetUrl: url,
-          expiresAt: null,
+          expiresAt: expiresAt ?? null,
           hasPassword: false,
           tags: [],
           createdAt: now,
@@ -207,6 +209,11 @@ export function createApp(db: Database.Database) {
         values.push(parsed.data.slug);
       }
 
+      if (parsed.data.expiresAt !== undefined) {
+        updates.push("expires_at = ?");
+        values.push(parsed.data.expiresAt);
+      }
+
       if (updates.length > 0) {
         const now = Date.now();
         updates.push("updated_at = ?");
@@ -248,11 +255,17 @@ export function createApp(db: Database.Database) {
       const slug = c.req.param("slug");
 
       const link = db
-        .prepare("SELECT id, target_url FROM links WHERE slug = ?")
-        .get(slug) as { id: string; target_url: string } | undefined;
+        .prepare("SELECT id, target_url, expires_at FROM links WHERE slug = ?")
+        .get(slug) as
+        | { id: string; target_url: string; expires_at: number | null }
+        | undefined;
 
       if (!link) {
         return c.json({ error: "Link not found", code: "NOT_FOUND" }, 404);
+      }
+
+      if (link.expires_at && link.expires_at < Date.now()) {
+        return c.json({ error: "Link expired", code: "GONE" }, 410);
       }
 
       // Record click
