@@ -126,6 +126,41 @@ export function createApp(db: Database.Database) {
         201
       );
     })
+    .get("/api/links", (c) => {
+      const page = Math.max(1, Number(c.req.query("page")) || 1);
+      const limit = Math.max(
+        1,
+        Math.min(100, Number(c.req.query("limit")) || 20)
+      );
+      const offset = (page - 1) * limit;
+
+      const { total } = db
+        .prepare("SELECT COUNT(*) as total FROM links")
+        .get() as { total: number };
+
+      const rows = db
+        .prepare(
+          "SELECT id, slug, target_url, password_hash, expires_at, created_at, updated_at FROM links ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        .all(limit, offset) as LinkRow[];
+
+      const links = rows.map((row) => {
+        const tags = db.prepare(TAGS_SELECT).all(row.id) as {
+          name: string;
+        }[];
+        return formatLinkResponse(row, tags);
+      });
+
+      return c.json({
+        links,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+        },
+      });
+    })
     .get("/api/links/:id", (c) => {
       const link = getLinkWithTags(c.req.param("id"));
 
