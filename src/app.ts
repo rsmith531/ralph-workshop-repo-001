@@ -123,6 +123,17 @@ export function createApp(db: Database.Database) {
         updatedAt: link.updated_at,
       });
     })
+    .delete("/api/links/:id", (c) => {
+      const id = c.req.param("id");
+
+      const result = db.prepare("DELETE FROM links WHERE id = ?").run(id);
+
+      if (result.changes === 0) {
+        return c.json({ error: "Link not found", code: "NOT_FOUND" }, 404);
+      }
+
+      return c.body(null, 204);
+    })
     .get("/:slug", (c) => {
       const slug = c.req.param("slug");
 
