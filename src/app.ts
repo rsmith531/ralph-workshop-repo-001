@@ -5,23 +5,69 @@ import { nanoid, customAlphabet } from "nanoid";
 
 const generateSlug = customAlphabet("abcdefghijklmnopqrstuvwxyz0123456789", 7);
 
+const urlField = z
+  .string()
+  .url()
+  .refine(
+    (u) => u.startsWith("http://") || u.startsWith("https://"),
+    "URL must use http or https"
+  );
+
+const slugField = z
+  .string()
+  .regex(/^[a-z0-9-]+$/)
+  .min(3)
+  .max(50);
+
 const createLinkSchema = z.object({
-  url: z
-    .string()
-    .url()
-    .refine(
-      (u) => u.startsWith("http://") || u.startsWith("https://"),
-      "URL must use http or https"
-    ),
-  slug: z
-    .string()
-    .regex(/^[a-z0-9-]+$/)
-    .min(3)
-    .max(50)
-    .optional(),
+  url: urlField,
+  slug: slugField.optional(),
 });
 
+const updateLinkSchema = z.object({
+  url: urlField.optional(),
+  slug: slugField.optional(),
+});
+
+interface LinkRow {
+  id: string;
+  slug: string;
+  target_url: string;
+  password_hash: string | null;
+  expires_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+const LINK_SELECT =
+  "SELECT id, slug, target_url, password_hash, expires_at, created_at, updated_at FROM links WHERE id = ?";
+
+function formatLinkResponse(link: LinkRow, tags: { name: string }[]) {
+  const baseUrl = process.env["BASE_URL"] || "http://localhost:3000";
+  return {
+    id: link.id,
+    slug: link.slug,
+    shortUrl: `${baseUrl}/${link.slug}`,
+    targetUrl: link.target_url,
+    expiresAt: link.expires_at,
+    hasPassword: link.password_hash !== null,
+    tags: tags.map((t) => t.name),
+    createdAt: link.created_at,
+    updatedAt: link.updated_at,
+  };
+}
+
 export function createApp(db: Database.Database) {
+  const TAGS_SELECT =
+    "SELECT t.name FROM tags t JOIN link_tags lt ON t.id = lt.tag_id WHERE lt.link_id = ?";
+
+  function getLinkWithTags(id: string) {
+    const link = db.prepare(LINK_SELECT).get(id) as LinkRow | undefined;
+    if (!link) return null;
+    const tags = db.prepare(TAGS_SELECT).all(id) as { name: string }[];
+    return formatLinkResponse(link, tags);
+  }
+
   return new Hono()
     .get("/api/health", (c) => {
       return c.json({ status: "ok" });
@@ -81,47 +127,76 @@ export function createApp(db: Database.Database) {
       );
     })
     .get("/api/links/:id", (c) => {
-      const id = c.req.param("id");
-
-      const link = db
-        .prepare(
-          "SELECT id, slug, target_url, password_hash, expires_at, created_at, updated_at FROM links WHERE id = ?"
-        )
-        .get(id) as
-        | {
-            id: string;
-            slug: string;
-            target_url: string;
-            password_hash: string | null;
-            expires_at: number | null;
-            created_at: number;
-            updated_at: number;
-          }
-        | undefined;
+      const link = getLinkWithTags(c.req.param("id"));
 
       if (!link) {
         return c.json({ error: "Link not found", code: "NOT_FOUND" }, 404);
       }
 
-      const tags = db
-        .prepare(
-          "SELECT t.name FROM tags t JOIN link_tags lt ON t.id = lt.tag_id WHERE lt.link_id = ?"
-        )
-        .all(id) as { name: string }[];
+      return c.json(link);
+    })
+    .patch("/api/links/:id", async (c) => {
+      const id = c.req.param("id");
+      const body = await c.req.json();
+      const parsed = updateLinkSchema.safeParse(body);
 
-      const baseUrl = process.env["BASE_URL"] || "http://localhost:3000";
+      if (!parsed.success) {
+        return c.json(
+          {
+            error: "Invalid request",
+            code: "VALIDATION_ERROR",
+            details: parsed.error.issues,
+          },
+          400
+        );
+      }
 
-      return c.json({
-        id: link.id,
-        slug: link.slug,
-        shortUrl: `${baseUrl}/${link.slug}`,
-        targetUrl: link.target_url,
-        expiresAt: link.expires_at,
-        hasPassword: link.password_hash !== null,
-        tags: tags.map((t) => t.name),
-        createdAt: link.created_at,
-        updatedAt: link.updated_at,
-      });
+      const existing = db
+        .prepare("SELECT id FROM links WHERE id = ?")
+        .get(id) as { id: string } | undefined;
+
+      if (!existing) {
+        return c.json({ error: "Link not found", code: "NOT_FOUND" }, 404);
+      }
+
+      const updates: string[] = [];
+      const values: unknown[] = [];
+
+      if (parsed.data.url !== undefined) {
+        updates.push("target_url = ?");
+        values.push(parsed.data.url);
+      }
+
+      if (parsed.data.slug !== undefined) {
+        updates.push("slug = ?");
+        values.push(parsed.data.slug);
+      }
+
+      if (updates.length > 0) {
+        const now = Date.now();
+        updates.push("updated_at = ?");
+        values.push(now);
+        values.push(id);
+
+        try {
+          db.prepare(`UPDATE links SET ${updates.join(", ")} WHERE id = ?`).run(
+            ...values
+          );
+        } catch (err: unknown) {
+          if (
+            err instanceof Error &&
+            err.message.includes("UNIQUE constraint failed: links.slug")
+          ) {
+            return c.json(
+              { error: "Slug already exists", code: "CONFLICT" },
+              409
+            );
+          }
+          throw err;
+        }
+      }
+
+      return c.json(getLinkWithTags(id));
     })
     .delete("/api/links/:id", (c) => {
       const id = c.req.param("id");
