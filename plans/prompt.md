@@ -34,9 +34,32 @@ If there are no more tasks, emit <promise>NO MORE TASKS</promise>.
 
 Explore the repo and fill your context window with relevant information that will allow you to complete the task.
 
-# EXECUTION
+# EXECUTION: RED
 
-Complete the task.
+First, write tests that fail because the feature is not yet implemented.
+
+Run the tests to check that they fail using `npm run test`.
+
+Tests should focus on the publicly accessible interface of the system. They should test user behavior, not internal implementation details.
+
+# EXECUTION: GREEN
+
+Next, implement the minimum amount of code necessary to make the tests pass.
+
+# EXECUTION: REFACTOR
+
+Finally, ALWAYS refactor the code to improve its structure. Don't just refactor the new code - look for opportunities to improve existing code as well.
+
+Ensure the code adheres to best practices:
+
+- Code is clear and readable
+- Functions and variables are well-named
+- No duplicated code
+- Proper error handling
+- No exposed secrets or API keys
+- Input validation implemented
+- Good test coverage
+- Performance considerations addressed
 
 If anything blocks your completion of the task, output <promise>ABORT</promise>.
 
@@ -44,7 +67,6 @@ If anything blocks your completion of the task, output <promise>ABORT</promise>.
 
 Before committing, run the feedback loops:
 
-- `npm run test` to run the tests
 - `npm run typecheck` to run the type checker
 
 # COMMIT
