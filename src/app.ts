@@ -20,19 +20,22 @@ const slugField = z
   .min(3)
   .max(50);
 
+const tagNameField = z
+  .string()
+  .regex(/^[a-z0-9-]+$/)
+  .min(1)
+  .max(30);
+
 const createLinkSchema = z.object({
   url: urlField,
   slug: slugField.optional(),
   expiresAt: z.number().int().positive().optional(),
   password: z.string().min(4).optional(),
+  tags: z.array(tagNameField).optional(),
 });
 
 const createTagSchema = z.object({
-  name: z
-    .string()
-    .regex(/^[a-z0-9-]+$/)
-    .min(1)
-    .max(30),
+  name: tagNameField,
 });
 
 const updateLinkSchema = z.object({
@@ -40,6 +43,7 @@ const updateLinkSchema = z.object({
   slug: slugField.optional(),
   expiresAt: z.number().int().positive().optional(),
   password: z.string().min(4).optional(),
+  tags: z.array(tagNameField).optional(),
 });
 
 interface LinkRow {
@@ -74,6 +78,27 @@ export function createApp(db: Database.Database) {
   const TAGS_SELECT =
     "SELECT t.name FROM tags t JOIN link_tags lt ON t.id = lt.tag_id WHERE lt.link_id = ?";
 
+  function syncTags(linkId: string, tagNames: string[]) {
+    db.prepare("DELETE FROM link_tags WHERE link_id = ?").run(linkId);
+    for (const name of tagNames) {
+      let tag = db.prepare("SELECT id FROM tags WHERE name = ?").get(name) as
+        | { id: string }
+        | undefined;
+      if (!tag) {
+        const tagId = nanoid();
+        db.prepare("INSERT INTO tags (id, name) VALUES (?, ?)").run(
+          tagId,
+          name
+        );
+        tag = { id: tagId };
+      }
+      db.prepare("INSERT INTO link_tags (link_id, tag_id) VALUES (?, ?)").run(
+        linkId,
+        tag.id
+      );
+    }
+  }
+
   function getLinkWithTags(id: string) {
     const link = db.prepare(LINK_SELECT).get(id) as LinkRow | undefined;
     if (!link) return null;
@@ -100,7 +125,13 @@ export function createApp(db: Database.Database) {
         );
       }
 
-      const { url, slug: customSlug, expiresAt, password } = parsed.data;
+      const {
+        url,
+        slug: customSlug,
+        expiresAt,
+        password,
+        tags: tagNames,
+      } = parsed.data;
       const id = nanoid();
       const slug = customSlug || generateSlug();
       const now = Date.now();
@@ -123,6 +154,10 @@ export function createApp(db: Database.Database) {
         throw err;
       }
 
+      if (tagNames && tagNames.length > 0) {
+        syncTags(id, tagNames);
+      }
+
       const baseUrl = process.env["BASE_URL"] || "http://localhost:3000";
 
       return c.json(
@@ -133,7 +168,7 @@ export function createApp(db: Database.Database) {
           targetUrl: url,
           expiresAt: expiresAt ?? null,
           hasPassword: passwordHash !== null,
-          tags: [],
+          tags: tagNames ?? [],
           createdAt: now,
           updatedAt: now,
         },
@@ -254,6 +289,10 @@ export function createApp(db: Database.Database) {
           }
           throw err;
         }
+      }
+
+      if (parsed.data.tags !== undefined) {
+        syncTags(id, parsed.data.tags);
       }
 
       return c.json(getLinkWithTags(id));
